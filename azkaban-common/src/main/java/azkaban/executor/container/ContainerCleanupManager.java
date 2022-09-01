@@ -88,8 +88,8 @@ public class ContainerCleanupManager {
   @Inject
   public ContainerCleanupManager(final Props azkProps, final ExecutorLoader executorLoader,
       final ContainerizedImpl containerizedImpl,
-      final ContainerizedDispatchManager containerizedDispatchManager, final
-      ContainerizationMetrics containerizationMetrics) {
+      final ContainerizedDispatchManager containerizedDispatchManager,
+      final ContainerizationMetrics containerizationMetrics) {
     // Get all the intervals
     this.executionCleanupIntervalMin = azkProps
         .getLong(
@@ -201,6 +201,11 @@ public class ContainerCleanupManager {
       if (shouldIgnore(flow, status)) {
         continue;
       }
+      // TODO: Pass in correct properties -
+      //  ENABLE_PROXYING/YARN_CONF_DIRECTORY_PROPERTY/AZKABAN_FLOW_EXEC_ID
+//      HadoopJobUtils.proxyUserKillAllSpawnedHadoopJobs(hadoopKillStrategy, props,
+//          tokenFile, logger);
+
       Status originalStatus = flow.getStatus();
       cancelFlowQuietly(flow, originalStatus);
       retryFlowQuietly(flow, originalStatus);

@@ -20,9 +20,7 @@ import static org.apache.hadoop.security.UserGroupInformation.HADOOP_TOKEN_FILE_
 import java.io.File;
 
 import azkaban.utils.Utils;
-import joptsimple.internal.Strings;
 import org.apache.log4j.Logger;
-import azkaban.flow.CommonJobProperties;
 import azkaban.security.commons.HadoopSecurityManager;
 import azkaban.security.commons.HadoopSecurityManagerException;
 import azkaban.utils.Props;
@@ -52,7 +50,7 @@ public class HadoopProxy {
    *
    * @param sysProps system properties
    * @param jobProps job properties
-   * @param logger logger handler
+   * @param logger   logger handler
    */
   private void init(Props sysProps, Props jobProps, final Logger logger) {
     shouldProxy = sysProps.getBoolean(HadoopSecurityManager.ENABLE_PROXYING, false);
@@ -86,9 +84,9 @@ public class HadoopProxy {
   /**
    * Setup Job Properties when the proxy is enabled
    *
-   * @param props all properties
+   * @param props    all properties
    * @param jobProps job properties
-   * @param logger logger handler
+   * @param logger   logger handler
    */
   public void setupPropsForProxy(Props props, Props jobProps, final Logger logger)
       throws Exception {
@@ -106,7 +104,7 @@ public class HadoopProxy {
    *
    * @param sysProps system properties
    * @param jobProps job properties
-   * @param logger logger handler
+   * @param logger   logger handler
    * @return proxy secure JVM argument string
    */
   public String getJVMArgument(Props sysProps, Props jobProps, final Logger logger) {
@@ -154,16 +152,12 @@ public class HadoopProxy {
    * Kill all Spawned Hadoop Jobs
    *
    * @param jobProps job properties
-   * @param logger logger handler
+   * @param logger   logger handler
    */
   public void killAllSpawnedHadoopJobs(Props jobProps, final Logger logger) {
     if (tokenFile == null) {
       return; // do null check for tokenFile
     }
-
-    final String logFilePath = jobProps.getString(CommonJobProperties.JOB_LOG_FILE);
-    logger.info("Log file path is: " + logFilePath);
-
-    HadoopJobUtils.proxyUserKillAllSpawnedHadoopJobs(logFilePath, jobProps, tokenFile, logger);
+    HadoopJobUtils.proxyUserKillAllSpawnedHadoopJobs(jobProps, tokenFile, logger);
   }
 }

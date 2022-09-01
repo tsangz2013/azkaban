@@ -15,10 +15,14 @@
  */
 package azkaban.jobtype;
 
+import static azkaban.Constants.FlowProperties.AZKABAN_FLOW_EXEC_ID;
+
+import azkaban.flow.CommonJobProperties;
 import azkaban.security.commons.HadoopSecurityManager;
 import azkaban.security.commons.HadoopSecurityManagerException;
 import azkaban.utils.Props;
 import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableSet;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
@@ -29,6 +33,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivilegedExceptionAction;
 import java.util.Collection;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -36,14 +41,18 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.ApplicationReport;
+import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.client.api.YarnClient;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.log4j.Logger;
 import org.apache.hadoop.fs.Path;
+import org.jetbrains.annotations.NotNull;
 
 
 /**
@@ -68,6 +77,8 @@ public class HadoopJobUtils {
   public static final String MATCH_ALL_REGEX = ".*";
   public static final String MATCH_NONE_REGEX = ".^";
   public static final String HADOOP_SECURITY_MANAGER_CLASS_PARAM = "hadoop.security.manager.class";
+  // Azkaban property key to specify strategy to kill hadoop jobs
+  public static final String HADOOP_KILL_JOB_STRATEGY_YARN_API = "hadoop.kill.job.strategy.yarn.api";
   // the regex to look for while looking for application id's in the hadoop log
   public static final Pattern APPLICATION_ID_PATTERN = Pattern
       .compile("^(application_\\d+_\\d+).*");
@@ -114,10 +125,9 @@ public class HadoopJobUtils {
   }
 
   /**
-   * The same as {@link #addAdditionalNamenodesToProps}, but assumes that the
-   * calling job is MapReduce-based and so uses the
-   * {@link #MAPREDUCE_JOB_OTHER_NAMENODES} from a {@link Configuration} object
-   * to get the list of additional namenodes.
+   * The same as {@link #addAdditionalNamenodesToProps}, but assumes that the calling job is
+   * MapReduce-based and so uses the {@link #MAPREDUCE_JOB_OTHER_NAMENODES} from a {@link
+   * Configuration} object to get the list of additional namenodes.
    *
    * @param props Props to add the new Namenode URIs to.
    * @see #addAdditionalNamenodesToProps(Props, String)
@@ -133,14 +143,14 @@ public class HadoopJobUtils {
   }
 
   /**
-   * Takes the list of other Namenodes from which to fetch delegation tokens,
-   * the {@link #OTHER_NAMENODES_PROPERTY} property, from Props and inserts it
-   * back with the addition of the the potentially JobType-specific Namenode URIs
-   * from additionalNamenodes. Modifies props in-place.
+   * Takes the list of other Namenodes from which to fetch delegation tokens, the {@link
+   * #OTHER_NAMENODES_PROPERTY} property, from Props and inserts it back with the addition of the
+   * the potentially JobType-specific Namenode URIs from additionalNamenodes. Modifies props
+   * in-place.
    *
-   * @param props Props to add the new Namenode URIs to.
-   * @param additionalNamenodes Comma-separated list of Namenode URIs from which to fetch
-   * delegation tokens.
+   * @param props               Props to add the new Namenode URIs to.
+   * @param additionalNamenodes Comma-separated list of Namenode URIs from which to fetch delegation
+   *                            tokens.
    */
   public static void addAdditionalNamenodesToProps(final Props props,
       final String additionalNamenodes) {
@@ -341,64 +351,90 @@ public class HadoopJobUtils {
   }
 
   /**
-   * This method is a decorator around the KillAllSpawnedHadoopJobs method.
-   * This method takes additional parameters to determine whether KillAllSpawnedHadoopJobs needs to
-   * be executed
-   * using doAs as a different user
+   * This method is a decorator around the KillAllSpawnedHadoopJobs method. This method takes
+   * additional parameters to determine whether KillAllSpawnedHadoopJobs needs to be executed using
+   * doAs as a different user
    *
-   * @param logFilePath Azkaban log file path
-   * @param jobProps Azkaban job props
+   * @param jobProps  Azkaban job props
    * @param tokenFile Pass in the tokenFile if value is known.  It is ok to skip if the token file
-   * is in the environmental variable
-   * @param log a usable logger
+   *                  is in the environmental variable
+   * @param log       a usable logger
    */
-  public static void proxyUserKillAllSpawnedHadoopJobs(final String logFilePath,
-      final Props jobProps,
-      final File tokenFile, final Logger log) {
+  public static void proxyUserKillAllSpawnedHadoopJobs(final Props jobProps, final File tokenFile,
+      final Logger log) {
     final Properties properties = new Properties();
     properties.putAll(jobProps.getFlattened());
 
     try {
       if (HadoopSecureWrapperUtils.shouldProxy(properties)) {
         final UserGroupInformation proxyUser =
-            HadoopSecureWrapperUtils.setupProxyUser(properties,
-                tokenFile.getAbsolutePath(), log);
+            HadoopSecureWrapperUtils.setupProxyUser(properties, tokenFile.getAbsolutePath(), log);
         proxyUser.doAs(new PrivilegedExceptionAction<Void>() {
           @Override
           public Void run() throws Exception {
-            HadoopJobUtils.killAllSpawnedHadoopJobs(logFilePath, log, jobProps);
+            YarnClient yarnClient = getYarnClient(jobProps);
+            HadoopJobUtils.killAllSpawnedHadoopJobs(yarnClient, jobProps, log);
             return null;
           }
         });
       } else {
-        HadoopJobUtils.killAllSpawnedHadoopJobs(logFilePath, log, jobProps);
+        YarnClient yarnClient = getYarnClient(jobProps);
+        HadoopJobUtils.killAllSpawnedHadoopJobs(yarnClient, jobProps, log);
       }
     } catch (final Throwable t) {
       log.warn("something happened while trying to kill all spawned jobs", t);
     }
   }
 
+  public static Set<String> killAllSpawnedHadoopJobs(
+      YarnClient yarnClient, Props jobProps, final Logger log) {
 
-  /**
-   * Pass in a log file, this method will find all the hadoop jobs it has launched, and kills it
-   *
-   * Only works with Hadoop2
-   *
-   * @return a Set<String>. The set will contain the applicationIds that this job tried to kill.
-   */
-  public static Set<String> killAllSpawnedHadoopJobs(final String logFilePath, final Logger log, final Props jobProps) {
-    final Set<String> allSpawnedJobs = findApplicationIdFromLog(logFilePath, log);
-    log.info("applicationIds to kill: " + allSpawnedJobs);
-
-    for (final String appId : allSpawnedJobs) {
-      try {
-        killJobOnCluster(appId, log, jobProps);
-      } catch (final Throwable t) {
-        log.warn("something happened while trying to kill this job: " + appId, t);
-      }
+    Set<String> allSpawnedJobs;
+    try {
+      allSpawnedJobs = getAllSpawnedHadoopJobsFromYARN(yarnClient,
+          jobProps.getString(AZKABAN_FLOW_EXEC_ID, ""), log);
+      log.info(String.format("Get alive yarn application IDs: %s", allSpawnedJobs));
+    } catch (Exception e) {
+      log.warn("fail to get application-ids from yarn, fallback to scan logfile", e);
+      final String logFilePath = jobProps.getString(CommonJobProperties.JOB_LOG_FILE);
+      allSpawnedJobs = findApplicationIdFromLog(logFilePath, log);
     }
 
+    log.info("applicationIds to kill: " + allSpawnedJobs);
+    killAllJobsOnCluster(yarnClient, log, allSpawnedJobs);
     return allSpawnedJobs;
+  }
+
+  /**
+   * Use the yarnClient to query the unfinished yarn applications, then use the yarnClient to kill
+   * them sequentially
+   *
+   * @param yarnClient the initialized yarnClient, already connected to the cluster
+   * @param flowExecID the azkaban flow execution id whose yarn applications needs to be killed
+   * @return the set of all to-be-killed (alive) yarn applications' IDs
+   * @throws IOException   for RPC issue
+   * @throws YarnException for YARN server issue
+   */
+  public static Set<String> getAllSpawnedHadoopJobsFromYARN(final YarnClient yarnClient,
+      final String flowExecID,
+      final Logger log)
+      throws IOException, YarnException, IllegalArgumentException {
+    EnumSet<YarnApplicationState> states = EnumSet.of(
+        YarnApplicationState.SUBMITTED,
+        YarnApplicationState.NEW_SAVING,
+        YarnApplicationState.NEW,
+        YarnApplicationState.ACCEPTED,
+        YarnApplicationState.RUNNING
+    );
+
+    Set<String> searchTags = ImmutableSet.of(AZKABAN_FLOW_EXEC_ID + ":" + flowExecID);
+    log.info(String.format("Searching for alive yarn application reports with tag %s", searchTags));
+
+    List<ApplicationReport> applicationReports = yarnClient.getApplications(
+        null, states, searchTags);
+
+    return applicationReports.stream().map(ApplicationReport::getApplicationId)
+        .map(ApplicationId::toString).collect(Collectors.toSet());
   }
 
   /**
@@ -412,6 +448,7 @@ public class HadoopJobUtils {
    */
   public static Set<String> findApplicationIdFromLog(final String logFilePath, final Logger log) {
     // At least one job log file must be there.
+    log.info("findApplicationIdFromLog in logfile: " + logFilePath);
     final File logFile = new File(logFilePath);
 
     if (!logFile.exists()) {
@@ -492,17 +529,10 @@ public class HadoopJobUtils {
    *   If the spark job is complete, it will return immediately, with a job not found on job tracker
    * </pre>
    */
-  public static void killJobOnCluster(final String applicationId, final Logger log, final Props jobProps)
+  public static void killJobOnCluster(final YarnClient yarnClient, final String applicationId,
+      final Logger log)
       throws YarnException,
       IOException {
-
-    final YarnConfiguration yarnConf = new YarnConfiguration();
-    final YarnClient yarnClient = YarnClient.createYarnClient();
-    if (jobProps.containsKey(YARN_CONF_DIRECTORY_PROPERTY)) {
-      yarnConf.addResource(new Path(jobProps.get(YARN_CONF_DIRECTORY_PROPERTY) + "/" + YARN_CONF_FILENAME));
-    }
-    yarnClient.init(yarnConf);
-    yarnClient.start();
 
     final String[] split = applicationId.split("_");
     final ApplicationId aid = ApplicationId.newInstance(Long.parseLong(split[1]),
@@ -511,6 +541,30 @@ public class HadoopJobUtils {
     log.info("start klling application: " + aid);
     yarnClient.killApplication(aid);
     log.info("successfully killed application: " + aid);
+  }
+
+  public static void killAllJobsOnCluster(YarnClient yarnClient, Logger log,
+      Set<String> allSpawnedJobs) {
+    for (final String appId : allSpawnedJobs) {
+      try {
+        killJobOnCluster(yarnClient, appId, log);
+      } catch (final Throwable t) {
+        log.warn("something happened while trying to kill this job: " + appId, t);
+      }
+    }
+  }
+
+  @NotNull
+  public static YarnClient getYarnClient(Props props) {
+    final YarnConfiguration yarnConf = new YarnConfiguration();
+    final YarnClient yarnClient = YarnClient.createYarnClient();
+    if (props.containsKey(YARN_CONF_DIRECTORY_PROPERTY)) {
+      yarnConf.addResource(
+          new Path(props.get(YARN_CONF_DIRECTORY_PROPERTY) + "/" + YARN_CONF_FILENAME));
+    }
+    yarnClient.init(yarnConf);
+    yarnClient.start();
+    return yarnClient;
   }
 
   /**
@@ -535,10 +589,10 @@ public class HadoopJobUtils {
    * Filter a collection of String commands to match a whitelist regex and not match a blacklist
    * regex.
    *
-   * @param commands Collection of commands to be filtered
+   * @param commands       Collection of commands to be filtered
    * @param whitelistRegex whitelist regex to work as inclusion criteria
    * @param blacklistRegex blacklist regex to work as exclusion criteria
-   * @param log logger to report violation
+   * @param log            logger to report violation
    * @return filtered list of matching. Empty list if no command match all the criteria.
    */
   public static List<String> filterCommands(final Collection<String> commands,
@@ -582,7 +636,7 @@ public class HadoopJobUtils {
    * Construct a CSV of tags for the Hadoop application.
    *
    * @param props job properties
-   * @param keys list of keys to construct tags from.
+   * @param keys  list of keys to construct tags from.
    * @return a CSV of tags
    */
   public static String constructHadoopTags(final Props props, final String[] keys) {
