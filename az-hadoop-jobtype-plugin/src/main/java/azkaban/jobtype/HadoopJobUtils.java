@@ -15,6 +15,9 @@
  */
 package azkaban.jobtype;
 
+
+import static azkaban.Constants.FlowProperties.AZKABAN_FLOW_EXEC_ID;
+
 import azkaban.flow.CommonJobProperties;
 import azkaban.security.commons.HadoopSecurityManager;
 import azkaban.security.commons.HadoopSecurityManagerException;
@@ -347,10 +350,6 @@ public class HadoopJobUtils {
    */
   public static void proxyUserKillAllSpawnedHadoopJobs(final Props jobProps,
       final File tokenFile, final Logger log) {
-
-    final String logFilePath = jobProps.getString(CommonJobProperties.JOB_LOG_FILE);
-    log.info("Log file path is: " + logFilePath);
-
     final Properties properties = new Properties();
     properties.putAll(jobProps.getFlattened());
 
@@ -362,20 +361,49 @@ public class HadoopJobUtils {
         proxyUser.doAs(new PrivilegedExceptionAction<Void>() {
           @Override
           public Void run() throws Exception {
-            Set<String> allSpawnedJobAppIDs = findApplicationIdFromLog(logFilePath, log);
             YarnClient yarnClient = YarnUtils.createYarnClient(jobProps);
+            Set<String> allSpawnedJobAppIDs = getApplicationIDsToKill(yarnClient, jobProps, log);
             YarnUtils.killAllAppsOnCluster(yarnClient, allSpawnedJobAppIDs, log);
             return null;
           }
         });
       } else {
-        Set<String> allSpawnedJobAppIDs = findApplicationIdFromLog(logFilePath, log);
         YarnClient yarnClient = YarnUtils.createYarnClient(jobProps);
+        Set<String> allSpawnedJobAppIDs = getApplicationIDsToKill(yarnClient, jobProps, log);
         YarnUtils.killAllAppsOnCluster(yarnClient, allSpawnedJobAppIDs, log);
       }
     } catch (final Throwable t) {
       log.warn("something happened while trying to kill all spawned jobs", t);
     }
+  }
+
+  /**
+   * Get the yarn applications' ids that needs to be killed (the ones alive / spawned),
+   * first use yarn client to call the cluster, if it fails, fallback to read the job log file
+   * content looking for application ids
+   * @param yarnClient the started client
+   * @param jobProps should contain flow execution id, and the job log file's path
+   * @param log logger
+   * @return the set of application ids
+   */
+  public  static Set<String> getApplicationIDsToKill(YarnClient yarnClient, Props jobProps, final Logger log){
+    Set<String> jobsToKill;
+    log.info(String.format("Get application IDs with Props: %s", jobProps.toString()));
+    try {
+      jobsToKill = YarnUtils.getAllAliveAppIDsByExecID(yarnClient,
+          jobProps.getString(AZKABAN_FLOW_EXEC_ID), log);
+      log.info(String.format("Get alive yarn application IDs from yarn cluster: %s", jobsToKill));
+    } catch (Exception e) {
+      log.warn("fail to get application-ids from yarn, fallback to scan logfile", e);
+
+      final String logFilePath = jobProps.getString(CommonJobProperties.JOB_LOG_FILE);
+      log.info("The job log file path is: " + logFilePath);
+
+      jobsToKill = findApplicationIdFromLog(logFilePath, log);
+      log.info(String.format("Get all spawned yarn application IDs from job log file: %s",
+          jobsToKill));
+    }
+    return jobsToKill;
   }
 
   /**
