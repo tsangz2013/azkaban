@@ -20,9 +20,9 @@ import static org.apache.hadoop.security.UserGroupInformation.HADOOP_TOKEN_FILE_
 import java.io.File;
 
 import azkaban.utils.Utils;
-import joptsimple.internal.Strings;
+import java.net.URL;
+import java.net.URLClassLoader;
 import org.apache.log4j.Logger;
-import azkaban.flow.CommonJobProperties;
 import azkaban.security.commons.HadoopSecurityManager;
 import azkaban.security.commons.HadoopSecurityManagerException;
 import azkaban.utils.Props;
@@ -40,6 +40,17 @@ public class HadoopProxy {
   private File tokenFile = null;
 
   public HadoopProxy(Props sysProps, Props jobProps, final Logger logger) {
+
+    // test-only
+    ClassLoader cl = ClassLoader.getSystemClassLoader();
+    URL[] urls = ((URLClassLoader)cl).getURLs();
+    logger.info("HadoopProxy: printing loaded class urls");
+    for(URL url: urls){
+      System.out.println(url.getFile());
+      logger.info(url.getFile());
+    }
+    logger.info("HadoopProxy: finish printing");
+
     init(sysProps, jobProps, logger);
   }
 
@@ -146,7 +157,7 @@ public class HadoopProxy {
       logger.error(e.getCause() + e.getMessage());
     }
     if (tokenFile.exists()) {
-      tokenFile.delete();
+//      tokenFile.delete();
     }
   }
 
@@ -160,10 +171,6 @@ public class HadoopProxy {
     if (tokenFile == null) {
       return; // do null check for tokenFile
     }
-
-    final String logFilePath = jobProps.getString(CommonJobProperties.JOB_LOG_FILE);
-    logger.info("Log file path is: " + logFilePath);
-
-    HadoopJobUtils.proxyUserKillAllSpawnedHadoopJobs(logFilePath, jobProps, tokenFile, logger);
+    HadoopJobUtils.proxyUserKillAllSpawnedHadoopJobs(jobProps, tokenFile, logger);
   }
 }

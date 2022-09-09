@@ -406,6 +406,14 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
         registerAllCustomCredentials(userToProxy, props, cred, logger);
         return null;
       });
+
+      logger.info("fetched cred = " + cred);
+      cred.getAllTokens().forEach(t -> {
+        logger.info(String.format("Token = %s, %s, %s ", t.getKind(), t.getService(),
+            Arrays.toString(t.getIdentifier())));
+      });
+      logger.info("cred end");
+
       logger.info("Preparing token file " + tokenFile.getAbsolutePath());
       prepareTokenFile(userToProxy, cred, tokenFile, logger,
           props.getString(Constants.ConfigurationKeys.SECURITY_USER_GROUP, "azkaban"));
