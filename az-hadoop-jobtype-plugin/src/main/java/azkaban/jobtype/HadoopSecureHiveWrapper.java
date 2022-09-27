@@ -64,7 +64,7 @@ public class HadoopSecureHiveWrapper {
     if (HadoopSecureWrapperUtils.shouldProxy(jobProps)) {
       String tokenFile = System.getenv(HADOOP_TOKEN_FILE_LOCATION);
       UserGroupInformation proxyUser =
-          HadoopSecureWrapperUtils.setupProxyUser(jobProps, tokenFile, logger);
+          HadoopSecureWrapperUtils.setupProxyUser( jobProps, tokenFile, logger);
       proxyUser.doAs(new PrivilegedExceptionAction<Void>() {
         @Override
         public Void run() throws Exception {

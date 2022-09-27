@@ -30,8 +30,6 @@ import java.io.FileNotFoundException;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivilegedExceptionAction;
 import java.util.Arrays;
@@ -44,12 +42,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.io.Text;
-import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
-import org.apache.hadoop.security.token.Token;
-import org.apache.hadoop.security.token.TokenIdentifier;
 import org.apache.hadoop.yarn.client.api.YarnClient;
 import org.apache.log4j.Logger;
 
@@ -349,12 +342,14 @@ public class HadoopJobUtils {
    * additional parameters to determine whether KillAllSpawnedHadoopJobs needs to be executed using
    * doAs as a different user
    *
+   * @param hadoopSecurityManager
    * @param jobProps  Azkaban job props
    * @param tokenFile Pass in the tokenFile if value is known.  It is ok to skip if the token file
-   *                  is in the environmental variable
+ *                  is in the environmental variable
    * @param log       a usable logger
    */
-  public static void proxyUserKillAllSpawnedHadoopJobs(final Props jobProps,
+  public static void proxyUserKillAllSpawnedHadoopJobs(
+      HadoopSecurityManager hadoopSecurityManager, final Props jobProps,
       final File tokenFile, final Logger log) {
 
     final Properties properties = new Properties();
@@ -380,7 +375,7 @@ public class HadoopJobUtils {
         log.info("1currentUser end");
 
         final UserGroupInformation proxyUser =
-            HadoopSecureWrapperUtils.setupProxyUser(properties,
+            HadoopSecureWrapperUtils.setupProxyUserNew(hadoopSecurityManager, properties,
                 tokenFile.getAbsolutePath(), log);
         proxyUser.doAs(new PrivilegedExceptionAction<Void>() {
           @Override

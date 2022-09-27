@@ -185,7 +185,8 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
    * properties file. It is also taking readIdentity for audit purpose.
    */
   @Override
-  public synchronized UserGroupInformation getProxiedUser(final String realIdentity, final String userToProxy)
+  public synchronized UserGroupInformation getProxiedUser(final String realIdentity,
+      final String userToProxy)
       throws HadoopSecurityManagerException {
     if (userToProxy == null) {
       throw new HadoopSecurityManagerException("userToProxy can't be null");
@@ -226,7 +227,8 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
   }
 
   /**
-   * Get file system as User passed in parameter. It is also passing realIdentity for audit purpose.
+   * Get file system as User passed in parameter. It is also passing realIdentity for audit
+   * purpose.
    *
    * @param realIdentity
    * @param proxyUser
@@ -401,6 +403,7 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
     final Credentials cred = new Credentials();
 
     try {
+      // cred is being populated
       fetchAllHadoopTokens(userToProxyFQN, userToProxy, props, logger, cred);
       getProxiedUser(userToProxyFQN).doAs((PrivilegedExceptionAction<Void>) () -> {
         registerAllCustomCredentials(userToProxy, props, cred, logger);
@@ -415,6 +418,7 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
       logger.info("cred end");
 
       logger.info("Preparing token file " + tokenFile.getAbsolutePath());
+      // assign userToProxy to the owner of the token file, not the FQN user
       prepareTokenFile(userToProxy, cred, tokenFile, logger,
           props.getString(Constants.ConfigurationKeys.SECURITY_USER_GROUP, "azkaban"));
       // stash them to cancel after use.
@@ -432,6 +436,7 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
 
   /**
    * This method is used to get FQN suffix which will be added to proxy user.
+   *
    * @param props
    * @return
    */
@@ -459,6 +464,12 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
     writeCredentialsToFile(credentials, tokenFile, logger);
     try {
       assignPermissions(user, tokenFile, group);
+
+      //todo: test only, should remove
+//      assignPermissions("azkdata", tokenFile, group);
+//      assignPermissions("root", tokenFile, group);
+//      assignPermissions("azktest", tokenFile, group);
+
     } catch (final IOException e) {
       // On any error managing token file. delete the file
       tokenFile.delete();
@@ -626,6 +637,16 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
     }
   }
 
+  @Override
+  public Credentials getTokens(File tokenFile, Logger logger)
+      throws HadoopSecurityManagerException {
+    try {
+      return Credentials.readTokenStorageFile(new Path(tokenFile.toURI()), this.conf);
+    } catch (final Exception e) {
+      throw new HadoopSecurityManagerException("Failed to get tokens from file", e);
+    }
+  }
+
   /**
    * Method to create a metastore client that retries on failures
    */
@@ -649,7 +670,8 @@ public abstract class AbstractHadoopSecurityManager extends HadoopSecurityManage
         }
       }
     };
-    logger.info(hiveConf.getAllProperties() + hookLoader.toString() + HiveMetaStoreClient.class.getName());
+    logger.info(
+        hiveConf.getAllProperties() + hookLoader.toString() + HiveMetaStoreClient.class.getName());
     return RetryingMetaStoreClient
         .getProxy(hiveConf, hookLoader, HiveMetaStoreClient.class.getName());
   }

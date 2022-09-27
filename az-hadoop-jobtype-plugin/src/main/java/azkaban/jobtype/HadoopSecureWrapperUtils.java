@@ -18,6 +18,7 @@ package azkaban.jobtype;
 import static org.apache.hadoop.security.UserGroupInformation.HADOOP_TOKEN_FILE_LOCATION;
 
 import azkaban.Constants;
+import azkaban.security.commons.HadoopSecurityManagerException;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -25,6 +26,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Properties;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.security.Credentials;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.token.Token;
 import org.apache.log4j.Logger;
@@ -50,9 +52,10 @@ public class HadoopSecureWrapperUtils {
    * @return a UserGroupInformation object for the specified userToProxy, which will also contain
    * the logged in user's tokens
    */
-  private static UserGroupInformation createSecurityEnabledProxyUser(String userToProxy,
+  private static UserGroupInformation createSecurityEnabledProxyUser(
+      HadoopSecurityManager hadoopSecurityManager, String userToProxy,
       String fileLocation, Logger log
-  ) throws IOException {
+  ) throws IOException, HadoopSecurityManagerException {
     log.info("createSecurityEnabledProxyUser starts");
 
     if (!new File(fileLocation).exists()) {
@@ -80,6 +83,20 @@ public class HadoopSecureWrapperUtils {
           Arrays.toString(token.getIdentifier())));
     }
     proxyUser.addCredentials(loginUser.getCredentials());
+
+    // 3. read tokens from file and put into proxyUser
+    if (hadoopSecurityManager != null) {
+      Credentials creds =  hadoopSecurityManager.getTokens(new File(fileLocation), log);
+      log.info(String.format("Loading tokens from file [%s] to proxyUser [%s]", fileLocation,
+          proxyUser));
+      for (Token<?> token : creds.getAllTokens()) {
+        proxyUser.addToken(token);
+        log.info(String.format("Token = %s, %s, %s ", token.getKind(), token.getService(),
+            Arrays.toString(token.getIdentifier())));
+      }
+      proxyUser.addCredentials(creds);
+    }
+
     log.info("token copy finished for " + loginUser.getUserName());
     return proxyUser;
   }
@@ -88,9 +105,9 @@ public class HadoopSecureWrapperUtils {
    * Sets up the UserGroupInformation proxyUser object so that calling code can do doAs returns null
    * if the jobProps does not call for a proxyUser
    *
-   * @param jobProps  job properties
-   * @param tokenFile pass tokenFile if known. Pass null if the tokenFile is in the environmental
-   *                  variable already.
+   * @param jobProps              job properties
+   * @param tokenFile             pass tokenFile if known. Pass null if the tokenFile is in the
+   *                              environmental variable already.
    * @return returns null if no need to run as proxyUser, otherwise returns valid proxyUser that can
    * doAs
    */
@@ -117,6 +134,7 @@ public class HadoopSecureWrapperUtils {
 
         proxyUser =
             HadoopSecureWrapperUtils.createSecurityEnabledProxyUser(
+                null,
                 userToProxy, tokenFile, log);
       } else {
         log.info("security not enabled, proxying as user " + userToProxy);
@@ -126,7 +144,49 @@ public class HadoopSecureWrapperUtils {
           proxyUser.addCredentials(UserGroupInformation.getLoginUser().getCredentials());
         }
       }
-    } catch (IOException e) {
+    } catch (IOException | HadoopSecurityManagerException e) {
+      log.error("HadoopSecureWrapperUtils.setupProxyUser threw an IOException",
+          e);
+    }
+
+    return proxyUser;
+  }
+
+  public static UserGroupInformation setupProxyUserNew(
+      HadoopSecurityManager hadoopSecurityManager, Properties jobProps,
+      String tokenFile, Logger log) {
+    UserGroupInformation proxyUser = null;
+
+    if (!HadoopSecureWrapperUtils.shouldProxy(jobProps)) {
+      log.info("submitting job as original submitter, not proxying");
+      return proxyUser;
+    }
+
+    // set up hadoop related configurations
+    final Configuration conf = new Configuration();
+    UserGroupInformation.setConfiguration(conf);
+    boolean securityEnabled = UserGroupInformation.isSecurityEnabled();
+
+    // setting up proxy user if required
+    try {
+      String userToProxy = null;
+      userToProxy = jobProps.getProperty(HadoopSecurityManager.USER_TO_PROXY);
+      if (securityEnabled) {
+        log.info("security enabled, proxying as user " + userToProxy);
+
+        proxyUser =
+            HadoopSecureWrapperUtils.createSecurityEnabledProxyUser(
+                hadoopSecurityManager,
+                userToProxy, tokenFile, log);
+      } else {
+        log.info("security not enabled, proxying as user " + userToProxy);
+
+        proxyUser = UserGroupInformation.createRemoteUser(userToProxy);
+        if (jobProps.getProperty(Constants.JobProperties.ENABLE_OAUTH, "false").equals("true")) {
+          proxyUser.addCredentials(UserGroupInformation.getLoginUser().getCredentials());
+        }
+      }
+    } catch (IOException | HadoopSecurityManagerException e) {
       log.error("HadoopSecureWrapperUtils.setupProxyUser threw an IOException",
           e);
     }
